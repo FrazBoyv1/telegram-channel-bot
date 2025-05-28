@@ -1,167 +1,119 @@
 import os
-from telegram import Update
+import logging
+import asyncio
+from datetime import datetime
+from pymongo import MongoClient
+from telegram import Update, ChatMemberUpdated
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    MessageHandler,
+    filters,
     ContextTypes,
-    ChatJoinRequestHandler,
+    ChatMemberHandler,
 )
-from pymongo import MongoClient
 
-# ENV variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
-MONGODB_URL = os.getenv("MONGODB_URL")
-admin_id_raw = os.getenv("ADMIN_ID")
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-try:
-    ADMIN_ID = int(admin_id_raw)
-except:
-    ADMIN_ID = None
-    print("❌ Invalid ADMIN_ID")
+# Load ENV variables
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+LOG_CHANNEL = os.environ.get("LOG_CHANNEL")
+MONGODB_URL = os.environ.get("MONGODB_URL")
 
-# Connect to MongoDB
-mongo = MongoClient(MONGODB_URL)
-db = mongo["telegram_bot"]
-users_col = db["users"]
-
-# Save user if not exists or update username
-def add_user(user_id: int, username: str = None):
-    if not users_col.find_one({"_id": user_id}):
-        users_col.insert_one({"_id": user_id, "username": username})
-        print(f"➕ New user added: {user_id} (@{username})")
-    else:
-        users_col.update_one({"_id": user_id}, {"$set": {"username": username}})
-
-# Get all user IDs
-def get_all_users():
-    return [doc["_id"] for doc in users_col.find()]
+# MongoDB Setup
+client = MongoClient(MONGODB_URL)
+db = client["telegram_bot"]
+users_collection = db["users"]
 
 # /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    add_user(user.id, user.username)
+    await update.message.reply_text("Hello! I'm your channel bot 🤖")
+    await log_msg(f"🟢 Bot started by [{user.full_name}](tg://user?id={user.id})")
 
-    if LOG_CHANNEL_ID:
-        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"🆕 New user: {user.id} (@{user.username})")
-
-    await update.message.reply_text("👋 Welcome! You’re now connected with the bot.")
-
-# Join request handler
-async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    req = update.chat_join_request
-    user_id = req.from_user.id
-    username = req.from_user.username or "NoUsername"
-
-    await context.bot.approve_chat_join_request(req.chat.id, user_id)
-    add_user(user_id, username)
-
-    try:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="✅ Your request to join the channel has been approved! Welcome!"
-        )
-        print(f"📩 Sent welcome message to {user_id} (@{username})")
-    except Exception as e:
-        print(f"❌ Failed to send welcome message to {user_id} - {e}")
-        if LOG_CHANNEL_ID:
-            await context.bot.send_message(
-                chat_id=LOG_CHANNEL_ID,
-                text=f"⚠️ Could not DM {user_id} (@{username}) after approval. Error: {e}"
-            )
-
-    if LOG_CHANNEL_ID:
-        await context.bot.send_message(
-            chat_id=LOG_CHANNEL_ID,
-            text=f"✅ Approved user: {user_id} (@{username})"
-        )
-
-# /broadcast command
+# /broadcast command (reply to message)
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You’re not authorized to use this command.")
+    if str(update.effective_user.id) != os.environ.get("OWNER_ID"):
         return
 
-    users = get_all_users()
-    success, fail = 0, 0
-    sent_type = "text"
+    if not update.message.reply_to_message:
+        await update.message.reply_text("⚠️ Please reply to a message to broadcast.")
+        return
 
-    if update.message.reply_to_message:
-        original = update.message.reply_to_message
-        for uid in users:
-            try:
-                await context.bot.copy_message(chat_id=uid, from_chat_id=update.effective_chat.id, message_id=original.message_id)
-                success += 1
-            except:
-                fail += 1
-        sent_type = "forward"
-    else:
-        message = ' '.join(context.args)
-        if not message:
-            await update.message.reply_text("⚠️ Usage: reply to a message or use /broadcast <text>")
-            return
-        for uid in users:
-            try:
-                await context.bot.send_message(chat_id=uid, text=message)
-                success += 1
-            except:
-                fail += 1
+    sent = 0
+    failed = 0
+    msg = update.message.reply_to_message
+    users = users_collection.find()
+    for user in users:
+        try:
+            await context.bot.copy_message(chat_id=user["user_id"], from_chat_id=msg.chat.id, message_id=msg.message_id)
+            sent += 1
+            await asyncio.sleep(0.3)
+        except Exception:
+            failed += 1
+            continue
 
-    msg = f"📢 Broadcast ({sent_type}) completed:\n✅ Sent: {success}\n❌ Failed: {fail}"
-    await update.message.reply_text(msg)
-    if LOG_CHANNEL_ID:
-        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"📢 Broadcast log\n{msg}")
+    await update.message.reply_text(f"✅ Sent: {sent}, ❌ Failed: {failed}")
 
 # /stats command
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Unauthorized access.")
-        return
-
-    count = users_col.count_documents({})
+    count = users_collection.count_documents({})
     await update.message.reply_text(f"📊 Total users: {count}")
-    if LOG_CHANNEL_ID:
-        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"📈 /stats command used: {count} users")
 
-# /users command
-async def users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Unauthorized access.")
-        return
+# New member join handler
+async def accept_request(update: ChatMemberUpdated, context: ContextTypes.DEFAULT_TYPE):
+    if update.chat_member.new_chat_member.status == "member":
+        user = update.chat_member.from_user
+        await context.bot.send_message(chat_id=user.id, text="✅ Your request to join the channel has been approved!")
 
-    users = get_all_users()
-    if not users:
-        await update.message.reply_text("No users found.")
-        return
+        # Save user to DB
+        users_collection.update_one(
+            {"user_id": user.id},
+            {"$set": {"user_id": user.id, "name": user.full_name, "joined": str(datetime.now())}},
+            upsert=True
+        )
 
-    user_list = "\n".join(str(uid) for uid in users)
-    if len(user_list) > 4000:
-        with open("user_ids.txt", "w") as f:
-            f.write(user_list)
-        await update.message.reply_document(document=open("user_ids.txt", "rb"))
-    else:
-        await update.message.reply_text(f"👥 Users ({len(users)}):\n\n{user_list}")
+        await log_msg(f"✅ Approved: [{user.full_name}](tg://user?id={user.id})")
 
-    if LOG_CHANNEL_ID:
-        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text="📤 /users command executed.")
+# Log messages to log channel
+async def log_msg(text):
+    if LOG_CHANNEL:
+        try:
+            await app.bot.send_message(chat_id=LOG_CHANNEL, text=text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Failed to send log: {e}")
 
-# Run bot
+# Keep-alive web server (only needed for Web Service on Render)
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'Bot is running!')
+
+def run_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), KeepAliveHandler)
+    logger.info(f"🟢 Keep-alive server running on port {port}")
+    server.serve_forever()
+
+# Run the bot
 if __name__ == '__main__':
+    threading.Thread(target=run_server).start()
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(ChatJoinRequestHandler(join_request))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("users", users_list))
+    app.add_handler(ChatMemberHandler(accept_request, ChatMemberHandler.CHAT_MEMBER))
 
-    async def on_startup(app):
-        print("✅ Bot started.")
-        if LOG_CHANNEL_ID:
-            try:
-                await app.bot.send_message(chat_id=LOG_CHANNEL_ID, text="🚀 Bot has restarted and is running.")
-            except Exception as e:
-                print(f"⚠️ Log channel failed: {e}")
-
-    app.post_init = on_startup
+    asyncio.run(log_msg("🔄 Bot restarted"))
     app.run_polling()

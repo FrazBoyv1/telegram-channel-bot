@@ -41,7 +41,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_users()
         if LOG_CHANNEL_ID:
             await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"🆕 New user: {user_id}")
-    await update.message.reply_text("Welcome to the channel bot!")
+    await update.message.reply_text("Welcome Bro , Just Add me to your channel / Group and i will accept the join requests For you!")
 
 # Auto-approve join requests
 async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):

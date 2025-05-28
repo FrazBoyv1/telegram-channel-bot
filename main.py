@@ -78,6 +78,19 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if LOG_CHANNEL_ID:
         await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"📢 Broadcast by {sender_id}:\n{message}\n\n{result_msg}")
 
+# /stats command (admin only)
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sender_id = update.effective_user.id
+    if sender_id != ADMIN_ID:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+
+    total_users = len(users)
+    await update.message.reply_text(f"📊 Total users: {total_users}")
+
+    if LOG_CHANNEL_ID:
+        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"📈 Stats requested by {sender_id}: {total_users} users.")
+
 # Run the bot
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -85,6 +98,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(ChatJoinRequestHandler(join_request))
     app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("stats", stats))
 
     # Log restart/startup to channel
     async def on_startup(app):

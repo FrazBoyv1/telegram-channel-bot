@@ -2,7 +2,9 @@ import logging
 import os
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ChatJoinRequestHandler
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ChatJoinRequestHandler, ContextTypes
+)
 
 load_dotenv()
 
@@ -10,8 +12,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 logging.basicConfig(level=logging.INFO)
-
-users = set()  # In-memory user list; use DB for production
+users = set()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user

@@ -1,112 +1,86 @@
 import os
-import logging
 import asyncio
-from datetime import datetime
+import logging
 from pymongo import MongoClient
 from telegram import Update, ChatMemberUpdated
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    ChatMemberHandler,
-)
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ChatMemberHandler
 
-# Enable logging
+# Logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Load ENV variables
+# ENV Vars
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-LOG_CHANNEL = os.environ.get("LOG_CHANNEL")
-MONGODB_URL = os.environ.get("MONGODB_URL")
-OWNER_ID = os.environ.get("OWNER_ID")
+OWNER_ID = int(os.environ.get("OWNER_ID"))
+LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL"))
+MONGO_URL = os.environ.get("MONGODB_URL")
 
-# MongoDB setup
-client = MongoClient(MONGODB_URL)
+# DB Setup
+client = MongoClient(MONGO_URL)
 db = client["telegram_bot"]
-users_collection = db["users"]
-
-# HTTP keep-alive server
-class KeepAliveHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b'Bot is alive!')
-
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), KeepAliveHandler)
-    logger.info(f"🟢 Web server running on port {port}")
-    server.serve_forever()
+users_col = db["users"]
 
 # Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    if user:
+        users_col.update_one({"id": user.id}, {"$set": user.to_dict()}, upsert=True)
     await update.message.reply_text("👋 Hey! I'm your channel request manager bot.")
-    await log_msg(f"🟢 /start by [{user.full_name}](tg://user?id={user.id})")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    count = users_collection.count_documents({})
-    await update.message.reply_text(f"📊 Total saved users: {count}")
+    if update.effective_user.id != OWNER_ID:
+        return
+    total_users = users_col.count_documents({})
+    await update.message.reply_text(f"📊 Total users: {total_users}")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id) != OWNER_ID:
+    if update.effective_user.id != OWNER_ID:
         return
     if not update.message.reply_to_message:
-        await update.message.reply_text("⚠️ Reply to a message to broadcast it.")
+        await update.message.reply_text("⚠️ Reply to a message to broadcast.")
         return
 
     msg = update.message.reply_to_message
-    users = users_collection.find()
-    sent, failed = 0, 0
-    for user in users:
+    total = 0
+    failed = 0
+
+    for user in users_col.find():
         try:
-            await context.bot.copy_message(chat_id=user["user_id"], from_chat_id=msg.chat.id, message_id=msg.message_id)
-            sent += 1
-            await asyncio.sleep(0.2)
-        except Exception:
+            await context.bot.copy_message(chat_id=user["id"], from_chat_id=msg.chat_id, message_id=msg.message_id)
+            total += 1
+        except:
             failed += 1
-    await update.message.reply_text(f"✅ Broadcasted to {sent} users\n❌ Failed: {failed}")
 
-# Join request accepted handler
-async def accept_request(update: ChatMemberUpdated, context: ContextTypes.DEFAULT_TYPE):
-    if update.chat_member.new_chat_member.status == "member":
-        user = update.chat_member.from_user
-        await context.bot.send_message(chat_id=user.id, text="✅ Your request has been approved. Welcome!")
-        users_collection.update_one(
-            {"user_id": user.id},
-            {"$set": {"user_id": user.id, "name": user.full_name, "joined": str(datetime.now())}},
-            upsert=True
-        )
-        await log_msg(f"✅ Join approved: [{user.full_name}](tg://user?id={user.id})")
+    await update.message.reply_text(f"✅ Broadcasted to {total} users.\n❌ Failed: {failed}")
 
-# Log to log channel
-async def log_msg(text):
-    if LOG_CHANNEL:
-        try:
-            await app.bot.send_message(chat_id=LOG_CHANNEL, text=text, parse_mode="Markdown")
-        except Exception as e:
-            logger.error(f"Log channel error: {e}")
+# Membership requests
+async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_join = update.chat_join_request
+    await context.bot.approve_chat_join_request(chat_id=chat_join.chat.id, user_id=chat_join.from_user.id)
+    await context.bot.send_message(chat_id=chat_join.from_user.id, text="✅ Your request to join the channel has been approved!")
+    users_col.update_one({"id": chat_join.from_user.id}, {"$set": chat_join.from_user.to_dict()}, upsert=True)
+    await context.bot.send_message(chat_id=LOG_CHANNEL, text=f"✅ Approved request from [{chat_join.from_user.first_name}](tg://user?id={chat_join.from_user.id})", parse_mode="Markdown")
 
-# Async bot start function
-async def start_bot():
-    global app
+# Log restart
+async def notify_restart(bot_app):
+    await bot_app.bot.send_message(chat_id=LOG_CHANNEL, text="🔄 Bot restarted and is now live!")
+
+# Main function
+async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(ChatMemberHandler(accept_request, ChatMemberHandler.CHAT_MEMBER))
-    await log_msg("🔄 Bot restarted")
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(ChatMemberHandler(join_request, ChatMemberHandler.CHAT_JOIN_REQUEST))
+
+    await notify_restart(app)
+    print("✅ Your service is live 🎉")
     await app.run_polling()
 
-# Entry point
+# Instead of asyncio.run()
 if __name__ == "__main__":
-    threading.Thread(target=run_server).start()
-    asyncio.run(start_bot())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())

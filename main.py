@@ -57,9 +57,18 @@ async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(user_id, username)
 
     try:
-        await context.bot.send_message(chat_id=user_id, text="✅ Your request to join the channel has been approved!")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="✅ Your request to join the channel has been approved! Welcome!"
+        )
+        print(f"📩 Sent welcome message to {user_id} (@{username})")
     except Exception as e:
-        print(f"❌ Couldn't send message to {user_id}: {e}")
+        print(f"❌ Failed to send welcome message to {user_id} - {e}")
+        if LOG_CHANNEL_ID:
+            await context.bot.send_message(
+                chat_id=LOG_CHANNEL_ID,
+                text=f"⚠️ Could not DM {user_id} (@{username}) after approval. Error: {e}"
+            )
 
     if LOG_CHANNEL_ID:
         await context.bot.send_message(

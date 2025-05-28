@@ -36,7 +36,11 @@ users = set()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    users.add(user_id)
+    if user_id not in users:
+        users.add(user_id)
+        save_users()  # Save new user permanently
+        if LOG_CHANNEL_ID:
+            await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"🆕 New user: {user_id}")
     await update.message.reply_text("Welcome to the channel bot!")
     
     if LOG_CHANNEL_ID:

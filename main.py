@@ -59,28 +59,48 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Unauthorized.")
         return
 
-    message = ' '.join(context.args)
-    if not message:
-        await update.message.reply_text("⚠️ Usage: /broadcast Your message here")
-        return
-
     success, fail = 0, 0
-    for user_id in users:
-        try:
-            await context.bot.send_message(chat_id=user_id, text=message)
-            success += 1
-        except:
-            fail += 1
+    sent_type = "text"
+    
+    # Reply-to broadcast
+    if update.message.reply_to_message:
+        original = update.message.reply_to_message
+        for user_id in users:
+            try:
+                await context.bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=original.message_id
+                )
+                success += 1
+            except:
+                fail += 1
+        sent_type = "forward"
+    
+    # Direct text broadcast
+    else:
+        message = ' '.join(context.args)
+        if not message:
+            await update.message.reply_text("⚠️ Usage: reply to a message with /broadcast OR use /broadcast <text>")
+            return
+        for user_id in users:
+            try:
+                await context.bot.send_message(chat_id=user_id, text=message)
+                success += 1
+            except:
+                fail += 1
 
-    result_msg = f"📢 Broadcast complete:\n✅ Sent: {success}\n❌ Failed: {fail}"
+    result_msg = f"📢 Broadcast ({sent_type}) done:\n✅ Sent: {success}\n❌ Failed: {fail}"
     await update.message.reply_text(result_msg)
 
     if LOG_CHANNEL_ID:
-        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"📢 Broadcast by {sender_id}:\n{message}\n\n{result_msg}")
+        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"📢 Broadcast ({sent_type}) by {sender_id}\n{result_msg}")
 
 # /stats command (admin only)
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender_id = update.effective_user.id
+    print(f"/stats used by: {sender_id}, ADMIN_ID is {ADMIN_ID}")  # For debugging
+
     if sender_id != ADMIN_ID:
         await update.message.reply_text("❌ Unauthorized.")
         return
@@ -91,6 +111,30 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if LOG_CHANNEL_ID:
         await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"📈 Stats requested by {sender_id}: {total_users} users.")
 
+# /users command (admin only)
+async def users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sender_id = update.effective_user.id
+    if sender_id != ADMIN_ID:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+
+    if not users:
+        await update.message.reply_text("No users found.")
+        return
+
+    user_list = "\n".join(str(uid) for uid in users)
+    response = f"👥 Total users: {len(users)}\n\n{user_list}"
+
+    if len(response) > 4000:
+        with open("user_ids.txt", "w") as f:
+            f.write(user_list)
+        await update.message.reply_document(document=open("user_ids.txt", "rb"), filename="user_ids.txt")
+    else:
+        await update.message.reply_text(response)
+
+    if LOG_CHANNEL_ID:
+        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=f"📤 /users command used by {sender_id}")
+
 # Run the bot
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -99,8 +143,9 @@ if __name__ == '__main__':
     app.add_handler(ChatJoinRequestHandler(join_request))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("users", users_list))
 
-    # Log restart/startup to channel
+    # Log bot start
     async def on_startup(app):
         print("🚀 Bot started successfully!")
         if LOG_CHANNEL_ID:

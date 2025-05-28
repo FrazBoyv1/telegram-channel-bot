@@ -1,3 +1,17 @@
+import json
+import os
+
+# Load users from file or start empty set
+if os.path.exists("users.json"):
+    with open("users.json", "r") as f:
+        users = set(json.load(f))
+else:
+    users = set()
+
+# Function to save users to the file
+def save_users():
+    with open("users.json", "w") as f:
+        json.dump(list(users), f)
 import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ChatJoinRequestHandler
